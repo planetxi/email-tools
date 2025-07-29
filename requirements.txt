@@ -1,0 +1,5 @@
+streamlit
+dnspython
+validators
+smtplib
+email-validator
