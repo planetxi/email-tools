@@ -1,147 +1,124 @@
 import streamlit as st
 import pandas as pd
 import re
-import dns.resolver
-import smtplib
-import socket
-from io import StringIO
+from itertools import product
+import base64
+import io
 
-# ----------------------------------------
-# Helper Functions
-# ----------------------------------------
+# Nickname map
+NICKNAME_MAP = {
+    "johnathan": "john",
+    "michael": "mike",
+    "william": "bill",
+    "elizabeth": "liz",
+    "robert": "bob",
+    "jennifer": "jen",
+    "stephanie": "steph",
+    "christopher": "chris",
+    "james": "jim",
+    "richard": "rich",
+    "charles": "chuck",
+    "daniel": "dan",
+    "anthony": "tony",
+    "patricia": "pat",
+}
 
-def is_valid_syntax(email):
-    regex = r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)"
-    return re.match(regex, email) is not None
+# Email syntax validator (not server check)
+def is_valid_email(email):
+    regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    return bool(re.match(regex, email))
 
-def has_mx_record(domain):
-    try:
-        records = dns.resolver.resolve(domain, 'MX')
-        return len(records) > 0
-    except Exception:
-        return False
-
-def is_disposable(email):
-    disposable_domains = ['mailinator.com', '10minutemail.com', 'guerrillamail.com']
-    return any(domain in email for domain in disposable_domains)
-
-def is_role_based(email):
-    return any(role in email.split('@')[0] for role in ['admin', 'info', 'support', 'contact'])
-
-def smtp_check(email):
-    domain = email.split('@')[1]
-    try:
-        mx_records = dns.resolver.resolve(domain, 'MX')
-        mx_record = str(mx_records[0].exchange)
-        server = smtplib.SMTP(timeout=10)
-        server.connect(mx_record)
-        server.helo()
-        server.mail('test@example.com')
-        code, _ = server.rcpt(email)
-        server.quit()
-        return code == 250
-    except Exception:
-        return False
-
-def validate_email(email):
-    result = {
-        "Email": email,
-        "Valid Syntax": is_valid_syntax(email),
-        "MX Record": False,
-        "Disposable": is_disposable(email),
-        "Role-based": is_role_based(email),
-        "SMTP Check": False
-    }
-
-    if result["Valid Syntax"]:
-        domain = email.split('@')[1]
-        result["MX Record"] = has_mx_record(domain)
-        if result["MX Record"]:
-            result["SMTP Check"] = smtp_check(email)
-
-    return result
-
+# Email permutation generator
 def generate_permutations(first, middle, last, domain, nickname=None):
-    first, middle, last = first.lower(), middle.lower(), last.lower()
-    nickname = nickname.lower() if nickname else ""
-    
-    nick_map = {
-        "johnathan": "john", "jonathan": "john", "michael": "mike", "robert": "rob", "william": "bill",
-        "steven": "steve", "jennifer": "jen", "katherine": "kat", "jessica": "jess", "elizabeth": "liz"
-    }
-    
-    if not nickname and first in nick_map:
-        nickname = nick_map[first]
+    first = first.lower().strip()
+    middle = middle.lower().strip() if middle else ""
+    last = last.lower().strip()
+    domain = domain.lower().strip()
 
-    parts = list(set(filter(None, [first, middle, last, nickname, first[0], last[0]])))
-    
-    combos = set()
-    for p1 in parts:
-        for p2 in parts:
-            if p1 != p2:
-                combos.add(f"{p1}{p2}@{domain}")
-                combos.add(f"{p1}.{p2}@{domain}")
-                combos.add(f"{p1}_{p2}@{domain}")
-    for p in parts:
-        combos.add(f"{p}@{domain}")
-    return sorted(combos)
+    all_firsts = [first]
 
-# ----------------------------------------
-# Streamlit App
-# ----------------------------------------
+    # Add nickname if available
+    if nickname:
+        all_firsts.append(nickname.lower())
+    elif first in NICKNAME_MAP:
+        all_firsts.append(NICKNAME_MAP[first])
 
-st.title("📧 Email Permutator + Validator")
+    middle_initial = middle[0] if middle else ""
+    last_initial = last[0] if last else ""
 
-tool = st.sidebar.radio("Select Tool", ["Email Permutator", "Email Validator", "Permutator + Validator"])
+    # Full name variations
+    full_name_variants = set()
+    for f in all_firsts:
+        if last:
+            full_name_variants.update({
+                f"{f}{last}",
+                f"{f}.{last}",
+                f"{f}_{last}",
+                f"{last}{f}",
+                f"{last}.{f}",
+                f"{last}_{f}",
+            })
+        if middle:
+            full_name_variants.update({
+                f"{f}{middle}{last}",
+                f"{f}.{middle}.{last}",
+                f"{f}_{middle}_{last}",
+                f"{f}{middle_initial}{last}",
+            })
 
-# -------------------------------
-# Email Permutator
-# -------------------------------
-if tool in ["Email Permutator", "Permutator + Validator"]:
-    st.header("Step 1: Enter Details for Email Permutation")
-    with st.form("permutation_form"):
-        first_name = st.text_input("First Name")
+    # Part-based combinations
+    part_combos = set()
+    for f, m, l in product(all_firsts, [middle, middle_initial, ""], [last, last_initial, ""]):
+        part_combos.update({
+            f"{f}@{domain}",
+            f"{f}{l}@{domain}",
+            f"{f}.{l}@{domain}",
+            f"{f}_{l}@{domain}",
+            f"{f}{m}{l}@{domain}",
+            f"{f}.{m}.{l}@{domain}",
+            f"{f}{m}@{domain}",
+            f"{f}.{m}@{domain}",
+            f"{f}{m}.{l}@{domain}",
+        })
+
+    all_emails = {f"{email}@{domain}" if '@' not in email else email for email in full_name_variants}
+    all_emails.update(part_combos)
+
+    # Validate syntax
+    return sorted([email for email in all_emails if is_valid_email(email)])
+
+# App UI
+st.set_page_config(page_title="Email Permutator + Validator", layout="centered")
+st.title("📧 Email Permutator & Validator")
+
+st.markdown("Generate possible professional email combinations with validation.")
+
+with st.form("email_form"):
+    col1, col2 = st.columns(2)
+    with col1:
+        first_name = st.text_input("First Name*", "")
         middle_name = st.text_input("Middle Name (Optional)", "")
-        last_name = st.text_input("Last Name")
-        domain = st.text_input("Domain (example.com)")
         nickname = st.text_input("Nickname (Optional)", "")
-        submit_perm = st.form_submit_button("Generate Emails")
+    with col2:
+        last_name = st.text_input("Last Name*", "")
+        domain = st.text_input("Domain (example.com)*", "")
+    submitted = st.form_submit_button("Generate Emails")
 
-    emails = []
-    if submit_perm and first_name and last_name and domain:
-        emails = generate_permutations(first_name, middle_name, last_name, domain, nickname)
-        st.success(f"✅ Generated {len(emails)} email combinations.")
-        st.write(emails)
-        csv_perm = pd.DataFrame(emails, columns=["Email"]).to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Emails", data=csv_perm, file_name="email_permutations.csv")
-
-# -------------------------------
-# Email Validator
-# -------------------------------
-if tool in ["Email Validator", "Permutator + Validator"]:
-    st.header("Step 2: Validate Emails")
-    source_type = st.radio("Input Method", ["Paste Emails", "Upload CSV"])
-
-    emails_to_check = []
-
-    if source_type == "Paste Emails":
-        input_text = st.text_area("Enter emails (one per line)")
-        if input_text:
-            emails_to_check = [e.strip() for e in input_text.splitlines() if e.strip()]
+if submitted:
+    if not first_name or not last_name or not domain:
+        st.warning("First name, Last name, and Domain are required.")
     else:
-        uploaded_file = st.file_uploader("Upload CSV with 'Email' column", type=["csv"])
-        if uploaded_file:
-            df = pd.read_csv(uploaded_file)
-            if 'Email' in df.columns:
-                emails_to_check = df['Email'].dropna().tolist()
-            else:
-                st.error("CSV must contain an 'Email' column.")
+        with st.spinner("Generating..."):
+            emails = generate_permutations(first_name, middle_name, last_name, domain, nickname)
+            if emails:
+                st.success(f"✅ Generated {len(emails)} email combinations.")
+                df = pd.DataFrame(emails, columns=["Email Address"])
+                st.dataframe(df, use_container_width=True)
 
-    if emails_to_check:
-        if st.button("Start Validation"):
-            with st.spinner("Validating..."):
-                results = [validate_email(email) for email in emails_to_check]
-                result_df = pd.DataFrame(results)
-                st.dataframe(result_df)
-                csv_result = result_df.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Download Validation Results", data=csv_result, file_name="email_validation_results.csv")
+                csv_buffer = io.StringIO()
+                df.to_csv(csv_buffer, index=False)
+                b64 = base64.b64encode(csv_buffer.getvalue().encode()).decode()
+                href = f'<a href="data:file/csv;base64,{b64}" download="email_combinations.csv">📥 Download CSV</a>'
+                st.markdown(href, unsafe_allow_html=True)
+            else:
+                st.error("No valid combinations generated.")
