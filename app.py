@@ -1,152 +1,147 @@
 import streamlit as st
-import csv
-import io
+import pandas as pd
 import re
-import smtplib
 import dns.resolver
+import smtplib
 import socket
-import ssl
+from io import StringIO
 
-# ----------------------------
-# UTILITY FUNCTIONS
-# ----------------------------
+# ----------------------------------------
+# Helper Functions
+# ----------------------------------------
 
-def clean_name(name):
-    return re.sub(r'[^a-zA-Z]', '', name.lower()) if name else ''
+def is_valid_syntax(email):
+    regex = r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)"
+    return re.match(regex, email) is not None
 
-def generate_permutations(first, middle, last, domain, nickname=None):
-    first, middle, last = clean_name(first), clean_name(middle), clean_name(last)
-    nickname = clean_name(nickname) if nickname else ''
-    
-    firsts = [first, first[0]] if first else []
-    middles = [middle, middle[0]] if middle else []
-    lasts = [last, last[0]] if last else []
-    nicknames = [nickname] if nickname else []
-
-    combos = set()
-
-    for f in firsts + nicknames:
-        for m in [''] + middles:
-            for l in [''] + lasts:
-                if f and l:
-                    combos.add(f"{f}{l}@{domain}")
-                    combos.add(f"{f}.{l}@{domain}")
-                if f and m and l:
-                    combos.add(f"{f}{m}{l}@{domain}")
-                    combos.add(f"{f}.{m}.{l}@{domain}")
-                if f and m:
-                    combos.add(f"{f}{m}@{domain}")
-                if f:
-                    combos.add(f"{f}@{domain}")
-                if l:
-                    combos.add(f"{l}@{domain}")
-
-    return sorted(list(combos))
-
-def check_mx(domain):
+def has_mx_record(domain):
     try:
-        dns.resolver.resolve(domain, 'MX')
-        return True
-    except:
+        records = dns.resolver.resolve(domain, 'MX')
+        return len(records) > 0
+    except Exception:
         return False
 
 def is_disposable(email):
-    disposable_domains = ['mailinator.com', '10minutemail.com', 'tempmail.com']
-    return any(d in email for d in disposable_domains)
+    disposable_domains = ['mailinator.com', '10minutemail.com', 'guerrillamail.com']
+    return any(domain in email for domain in disposable_domains)
 
 def is_role_based(email):
-    roles = ['admin', 'support', 'info', 'sales', 'contact', 'team']
-    local = email.split('@')[0]
-    return any(local.startswith(role) for role in roles)
+    return any(role in email.split('@')[0] for role in ['admin', 'info', 'support', 'contact'])
 
 def smtp_check(email):
-    domain = email.split('@')[-1]
+    domain = email.split('@')[1]
     try:
         mx_records = dns.resolver.resolve(domain, 'MX')
         mx_record = str(mx_records[0].exchange)
         server = smtplib.SMTP(timeout=10)
         server.connect(mx_record)
-        server.helo(socket.gethostname())
+        server.helo()
         server.mail('test@example.com')
         code, _ = server.rcpt(email)
         server.quit()
         return code == 250
-    except:
+    except Exception:
         return False
 
 def validate_email(email):
-    domain = email.split('@')[-1]
-    return {
+    result = {
         "Email": email,
-        "Valid Format": re.match(r"[^@]+@[^@]+\.[^@]+", email) is not None,
-        "MX Record": check_mx(domain),
+        "Valid Syntax": is_valid_syntax(email),
+        "MX Record": False,
         "Disposable": is_disposable(email),
-        "Role-Based": is_role_based(email),
-        "SMTP Valid": smtp_check(email),
+        "Role-based": is_role_based(email),
+        "SMTP Check": False
     }
 
-# ----------------------------
-# STREAMLIT APP
-# ----------------------------
+    if result["Valid Syntax"]:
+        domain = email.split('@')[1]
+        result["MX Record"] = has_mx_record(domain)
+        if result["MX Record"]:
+            result["SMTP Check"] = smtp_check(email)
 
-st.title("📧 Email Toolkit: Permutator + Validator")
-option = st.radio("Choose a tool:", ["Email Permutator", "Email Validator"])
+    return result
 
-if option == "Email Permutator":
-    st.header("🔁 Generate Email Permutations")
+def generate_permutations(first, middle, last, domain, nickname=None):
+    first, middle, last = first.lower(), middle.lower(), last.lower()
+    nickname = nickname.lower() if nickname else ""
     
-    col1, col2 = st.columns(2)
-    with col1:
-        first = st.text_input("First Name", "")
-        middle = st.text_input("Middle Name (Optional)", "")
+    nick_map = {
+        "johnathan": "john", "jonathan": "john", "michael": "mike", "robert": "rob", "william": "bill",
+        "steven": "steve", "jennifer": "jen", "katherine": "kat", "jessica": "jess", "elizabeth": "liz"
+    }
+    
+    if not nickname and first in nick_map:
+        nickname = nick_map[first]
+
+    parts = list(set(filter(None, [first, middle, last, nickname, first[0], last[0]])))
+    
+    combos = set()
+    for p1 in parts:
+        for p2 in parts:
+            if p1 != p2:
+                combos.add(f"{p1}{p2}@{domain}")
+                combos.add(f"{p1}.{p2}@{domain}")
+                combos.add(f"{p1}_{p2}@{domain}")
+    for p in parts:
+        combos.add(f"{p}@{domain}")
+    return sorted(combos)
+
+# ----------------------------------------
+# Streamlit App
+# ----------------------------------------
+
+st.title("📧 Email Permutator + Validator")
+
+tool = st.sidebar.radio("Select Tool", ["Email Permutator", "Email Validator", "Permutator + Validator"])
+
+# -------------------------------
+# Email Permutator
+# -------------------------------
+if tool in ["Email Permutator", "Permutator + Validator"]:
+    st.header("Step 1: Enter Details for Email Permutation")
+    with st.form("permutation_form"):
+        first_name = st.text_input("First Name")
+        middle_name = st.text_input("Middle Name (Optional)", "")
+        last_name = st.text_input("Last Name")
+        domain = st.text_input("Domain (example.com)")
         nickname = st.text_input("Nickname (Optional)", "")
-    with col2:
-        last = st.text_input("Last Name", "")
-        domain = st.text_input("Domain (e.g. example.com)", "")
+        submit_perm = st.form_submit_button("Generate Emails")
 
-    validate_checkbox = st.checkbox("Validate each email (may take time)")
+    emails = []
+    if submit_perm and first_name and last_name and domain:
+        emails = generate_permutations(first_name, middle_name, last_name, domain, nickname)
+        st.success(f"✅ Generated {len(emails)} email combinations.")
+        st.write(emails)
+        csv_perm = pd.DataFrame(emails, columns=["Email"]).to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Emails", data=csv_perm, file_name="email_permutations.csv")
 
-    if st.button("Generate Emails"):
-        if not first or not last or not domain:
-            st.error("Please fill at least First Name, Last Name, and Domain.")
-        else:
-            results = generate_permutations(first, middle, last, domain, nickname)
-            if validate_checkbox:
-                validated = [validate_email(email) for email in results]
-                st.write("### ✅ Validated Email Permutations")
-                st.dataframe(validated)
-                csv_data = io.StringIO()
-                writer = csv.DictWriter(csv_data, fieldnames=validated[0].keys())
-                writer.writeheader()
-                writer.writerows(validated)
-                st.download_button("📥 Download CSV", csv_data.getvalue(), file_name="validated_emails.csv", mime="text/csv")
+# -------------------------------
+# Email Validator
+# -------------------------------
+if tool in ["Email Validator", "Permutator + Validator"]:
+    st.header("Step 2: Validate Emails")
+    source_type = st.radio("Input Method", ["Paste Emails", "Upload CSV"])
+
+    emails_to_check = []
+
+    if source_type == "Paste Emails":
+        input_text = st.text_area("Enter emails (one per line)")
+        if input_text:
+            emails_to_check = [e.strip() for e in input_text.splitlines() if e.strip()]
+    else:
+        uploaded_file = st.file_uploader("Upload CSV with 'Email' column", type=["csv"])
+        if uploaded_file:
+            df = pd.read_csv(uploaded_file)
+            if 'Email' in df.columns:
+                emails_to_check = df['Email'].dropna().tolist()
             else:
-                st.write("### 📬 Generated Emails")
-                st.dataframe(results)
-                csv_data = io.StringIO()
-                writer = csv.writer(csv_data)
-                writer.writerow(["Email"])
-                writer.writerows([[r] for r in results])
-                st.download_button("📥 Download CSV", csv_data.getvalue(), file_name="emails.csv", mime="text/csv")
+                st.error("CSV must contain an 'Email' column.")
 
-elif option == "Email Validator":
-    st.header("✅ Bulk Email Validator")
-    uploaded_file = st.file_uploader("Upload CSV with Email column", type=['csv'])
-
-    if uploaded_file:
-        file = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
-        reader = csv.DictReader(file)
-        if 'Email' not in reader.fieldnames:
-            st.error("CSV must contain 'Email' column.")
-        else:
-            emails = [row['Email'] for row in reader]
-            with st.spinner("Validating emails..."):
-                results = [validate_email(email) for email in emails]
-            st.success("Validation Complete ✅")
-            st.dataframe(results)
-
-            csv_out = io.StringIO()
-            writer = csv.DictWriter(csv_out, fieldnames=results[0].keys())
-            writer.writeheader()
-            writer.writerows(results)
-            st.download_button("📥 Download Validated Emails", csv_out.getvalue(), file_name="validated_emails.csv", mime="text/csv")
+    if emails_to_check:
+        if st.button("Start Validation"):
+            with st.spinner("Validating..."):
+                results = [validate_email(email) for email in emails_to_check]
+                result_df = pd.DataFrame(results)
+                st.dataframe(result_df)
+                csv_result = result_df.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Validation Results", data=csv_result, file_name="email_validation_results.csv")
