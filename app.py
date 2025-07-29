@@ -1,10 +1,11 @@
 import streamlit as st
 import re
-from urllib.parse import urlparse
+import socket
+import dns.resolver
 
-st.set_page_config(page_title="Email Permutator & Validator", layout="wide")
+st.set_page_config(page_title="Email Permutator + Validator", layout="centered")
 
-# Nickname dictionary
+# Nickname directory
 nickname_map = {
     "Alexander": ["Alex", "Xander", "Lex"],
     "Andrew": ["Andy", "Drew"],
@@ -72,77 +73,91 @@ nickname_map = {
     "Zachary": ["Zack", "Zach"]
 }
 
-# Simple email validator using regex
-def is_valid_email(email):
-    pattern = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
-    return re.match(pattern, email) is not None
+def clean_domain(raw_input):
+    domain = re.sub(r"https?://", "", raw_input.strip().lower())
+    domain = domain.split("/")[0]
+    return domain
 
-# Extract domain from URL or domain input
-def extract_domain(raw_input):
-    if not raw_input.startswith("http"):
-        raw_input = "http://" + raw_input
+def validate_email_syntax(email):
+    pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    return re.match(pattern, email)
+
+def check_dns_records(domain):
+    results = {"MX": False, "SPF": False, "DMARC": False}
     try:
-        domain = urlparse(raw_input).netloc
-        if domain.startswith("www."):
-            domain = domain[4:]
-        return domain
+        results["MX"] = bool(dns.resolver.resolve(domain, "MX"))
     except:
-        return ""
+        pass
+    try:
+        spf = dns.resolver.resolve(domain, "TXT")
+        results["SPF"] = any("v=spf1" in str(r) for r in spf)
+    except:
+        pass
+    try:
+        dmarc = dns.resolver.resolve(f"_dmarc.{domain}", "TXT")
+        results["DMARC"] = any("v=DMARC1" in str(r) for r in dmarc)
+    except:
+        pass
+    return results
 
-# Generate permutations
-def generate_permutations(first, middle, last, domain):
-    names = [first]
+def generate_combinations(first, middle, last, domain):
+    names = [first, last, first + last, last + first]
+    initials = [first[0], last[0]]
+    combos = [
+        f"{first}@{domain}",
+        f"{first}.{last}@{domain}",
+        f"{first}{last}@{domain}",
+        f"{first[0]}{last}@{domain}",
+        f"{first}{last[0]}@{domain}",
+        f"{last}.{first}@{domain}",
+        f"{first}_{last}@{domain}",
+        f"{last}@{domain}",
+    ]
     if middle:
-        names.append(middle)
-    names.append(last)
+        combos += [
+            f"{first}.{middle}.{last}@{domain}",
+            f"{first[0]}{middle[0]}{last}@{domain}",
+            f"{first}{middle[0]}{last}@{domain}"
+        ]
+    nicknames = nickname_map.get(first.capitalize(), [])
+    for nick in nicknames:
+        combos += [
+            f"{nick}@{domain}",
+            f"{nick}.{last}@{domain}",
+            f"{nick}{last}@{domain}",
+            f"{nick[0]}{last}@{domain}"
+        ]
+    return list(set(combos))
 
-    variants = [first, middle, last]
-    all_variants = list(filter(None, set(variants + nickname_map.get(first.capitalize(), []))))
-
-    combinations = set()
-
-    for v1 in all_variants:
-        v1 = v1.lower()
-        combinations.update([
-            f"{v1}@{domain}",
-            f"{v1}{last}@{domain}",
-            f"{v1}.{last}@{domain}",
-            f"{first[0]}{last}@{domain}",
-            f"{first[0]}.{last}@{domain}",
-            f"{first}{last}@{domain}",
-            f"{first}.{last}@{domain}",
-            f"{first}_{last}@{domain}",
-            f"{last}.{first}@{domain}",
-            f"{last}{first}@{domain}"
-        ])
-    return sorted(combinations)
-
-# Streamlit UI
-st.title("📧 Email Permutator & Validator")
+# UI
+st.title("🔧 Email Permutator + Validator")
+st.caption("Enter name and domain. Tool generates possible email IDs + DNS-based validation.")
 
 col1, col2 = st.columns(2)
-
 with col1:
-    raw_name = st.text_input("Full Name").strip()
-    domain_input = st.text_input("Website or Domain").strip()
-
+    raw_name = st.text_input("Full Name (First Middle Last):", "Jonathan Smith")
 with col2:
-    st.markdown("**How it works:**")
-    st.markdown("- Enter full name and website/domain")
-    st.markdown("- Automatically generates email permutations")
-    st.markdown("- Uses built-in nickname logic")
-    st.markdown("- Validates format only")
+    raw_domain = st.text_input("Website or Domain:", "https://example.com")
 
-if raw_name and domain_input:
-    name_parts = raw_name.lower().split()
-    first = name_parts[0]
-    middle = name_parts[1] if len(name_parts) == 3 else ""
-    last = name_parts[-1] if len(name_parts) > 1 else ""
+if raw_name and raw_domain:
+    name_parts = raw_name.replace("  ", " ").strip().split()
+    first = name_parts[0].lower()
+    middle = name_parts[1].lower() if len(name_parts) == 3 else ""
+    last = name_parts[-1].lower()
 
-    domain = extract_domain(domain_input)
-    permutations = generate_permutations(first, middle, last, domain)
+    domain = clean_domain(raw_domain)
+    combinations = generate_combinations(first, middle, last, domain)
 
-    st.subheader("Generated Emails")
-    for email in permutations:
-        status = "✅ Valid" if is_valid_email(email) else "❌ Invalid"
-        st.write(f"{email} — {status}")
+    dns_info = check_dns_records(domain)
+
+    st.markdown(f"### ✅ Generated Emails ({len(combinations)})")
+    for email in combinations:
+        syntax_ok = validate_email_syntax(email)
+        emoji = "✅" if syntax_ok else "❌"
+        st.write(f"{emoji} `{email}`")
+
+    st.markdown("---")
+    st.markdown(f"### 🧪 DNS Email Validation for `{domain}`")
+    st.write(f"- MX Records: {'✅' if dns_info['MX'] else '❌'}")
+    st.write(f"- SPF Record: {'✅' if dns_info['SPF'] else '❌'}")
+    st.write(f"- DMARC Record: {'✅' if dns_info['DMARC'] else '❌'}")
