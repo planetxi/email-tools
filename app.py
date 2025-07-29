@@ -1,172 +1,144 @@
 import streamlit as st
-import csv
-import io
 import re
-import smtplib
-import dns.resolver
-from typing import List
 from itertools import product
+import validators
+import dns.resolver
 
-# Suggested nicknames (you can expand this dictionary)
+# Nickname map
 NICKNAME_MAP = {
-    "johnathan": "john",
-    "jonathan": "jon",
-    "michael": "mike",
-    "william": "will",
-    "robert": "rob",
-    "richard": "rick",
-    "steven": "steve",
-    "thomas": "tom",
-    "james": "jim",
-    "charles": "charlie",
-    "jennifer": "jen",
-    "elizabeth": "liz",
-    "katherine": "kate",
-    "christopher": "chris"
+    "Johnathan": ["John"],
+    "Michael": ["Mike"],
+    "Alexander": ["Alex", "Xander", "Lex"],
+    "Andrew": ["Andy", "Drew"],
+    "Anthony": ["Tony"],
+    "Barbara": ["Barb", "Babs"],
+    "Benjamin": ["Ben", "Benny"],
+    "Brandon": ["Brad", "Bran"],
+    "Catherine": ["Cathy", "Cat", "Kate", "Katie"],
+    "Katherine": ["Cathy", "Cat", "Kate", "Katie"],
+    "Charles": ["Charlie", "Chuck", "Chaz"],
+    "Christopher": ["Chris", "Topher", "Kit"],
+    "Daniel": ["Dan", "Danny"],
+    "David": ["Dave", "Davey"],
+    "Dorothy": ["Dot", "Dottie"],
+    "Edward": ["Ed", "Eddie", "Ned", "Ted"],
+    "Elizabeth": ["Liz", "Lizzy", "Beth", "Eliza", "Ellie", "Betty", "Liza", "Libby"],
+    "Eleanor": ["Ellie", "Nora"],
+    "Francis": ["Frank", "Frankie"],
+    "Frances": ["Fran", "Frankie"],
+    "Frederick": ["Fred", "Freddy", "Rick"],
+    "George": ["Geo", "Georgie"],
+    "Gregory": ["Greg"],
+    "Harold": ["Harry", "Hal"],
+    "Henry": ["Hank", "Harry"],
+    "Isabella": ["Bella", "Izzy"],
+    "Jacob": ["Jake"],
+    "James": ["Jim", "Jimmy", "Jamie"],
+    "Jennifer": ["Jen", "Jenny"],
+    "John": ["Jack", "Johnny"],
+    "Jonathan": ["Jon", "Jonny", "Nate"],
+    "Joseph": ["Joe", "Joey"],
+    "Joshua": ["Josh"],
+    "Judith": ["Judy"],
+    "Kenneth": ["Ken", "Kenny"],
+    "Kimberly": ["Kim"],
+    "Lawrence": ["Larry"],
+    "Leonard": ["Lenny", "Leo"],
+    "Margaret": ["Maggie", "Meg", "Peggy", "Margo", "Greta", "Daisy"],
+    "Matthew": ["Matt"],
+    "Michael": ["Mike", "Mikey"],
+    "Michelle": ["Shelly", "Mich"],
+    "Nicholas": ["Nick", "Nicky"],
+    "Olivia": ["Liv", "Livvy", "Ollie"],
+    "Oscar": ["Ozzy"],
+    "Patricia": ["Pat", "Patty", "Trish"],
+    "Patrick": ["Pat", "Rick"],
+    "Raymond": ["Ray"],
+    "Rebecca": ["Becky", "Becca"],
+    "Richard": ["Rich", "Rick", "Dick", "Richie"],
+    "Robert": ["Rob", "Robbie", "Bob", "Bobby"],
+    "Samuel": ["Sam", "Sammy"],
+    "Sandra": ["Sandy"],
+    "Stephen": ["Steve", "Stevie"],
+    "Steven": ["Steve", "Stevie"],
+    "Susan": ["Sue", "Susie"],
+    "Theodore": ["Theo", "Ted", "Teddy"],
+    "Thomas": ["Tom", "Tommy"],
+    "Timothy": ["Tim", "Timmy"],
+    "Teresa": ["Terry", "Tessa", "Tess"],
+    "Theresa": ["Terry", "Tessa", "Tess"],
+    "Victoria": ["Vicky", "Tori"],
+    "Vincent": ["Vince", "Vinny"],
+    "Walter": ["Walt", "Wally"],
+    "William": ["Will", "Bill", "Billy", "Liam"],
+    "Zachary": ["Zack", "Zach"]
 }
 
-# ---------------------- Email Validation Logic ----------------------
-def is_valid_email_format(email):
-    regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-    return re.match(regex, email)
 
-def has_mx_record(domain):
-    try:
-        records = dns.resolver.resolve(domain, 'MX')
-        return len(records) > 0
-    except:
-        return False
+def clean_name(name):
+    return re.sub(r"\s+", "", name.strip())
 
-def smtp_check(email):
-    domain = email.split('@')[1]
-    try:
-        records = dns.resolver.resolve(domain, 'MX')
-        mx_record = str(records[0].exchange)
-        server = smtplib.SMTP()
-        server.set_debuglevel(0)
-        server.connect(mx_record)
-        server.helo(server.local_hostname)
-        server.mail('test@example.com')
-        code, _ = server.rcpt(email)
-        server.quit()
-        return code == 250
-    except:
-        return False
 
-def validate_email(email):
-    if not is_valid_email_format(email):
-        return "❌ Invalid Format"
-    if not has_mx_record(email.split('@')[1]):
-        return "❌ No MX Record"
-    if smtp_check(email):
-        return "✅ Deliverable"
-    else:
-        return "⚠️ Undeliverable"
+def extract_domain(url_or_domain):
+    url_or_domain = url_or_domain.strip().lower()
+    if "http" in url_or_domain:
+        url_or_domain = re.sub(r"https?://", "", url_or_domain)
+    return url_or_domain.split("/")[0]
 
-# ---------------------- Permutation Logic ----------------------
-def generate_permutations(first, middle, last, domain, nickname=None):
-    first = first.lower()
-    middle = middle.lower() if middle else ""
-    last = last.lower()
-    domain = domain.lower()
-    
-    all_firsts = [first]
-    
-    # Add suggested nickname
-    if nickname:
-        all_firsts.append(nickname.lower())
-    elif first.lower() in NICKNAME_MAP:
-        all_firsts.append(NICKNAME_MAP[first.lower()])
-    
-    middle_initial = middle[0] if middle else ""
-    last_initial = last[0] if last else ""
+
+def get_permutations(first, middle, last, nicknames):
+    firsts = [first] + nicknames.get(first, [])
+    middles = [middle] if middle else [""]
+    lasts = [last] if last else [""]
+
+    patterns = [
+        ["{f}{l}", "{f}.{l}", "{f}_{l}", "{f}{m}{l}", "{f}.{m}.{l}", "{f}_{m}_{l}", "{l}{f}"],
+        ["{l}{f}", "{l}.{f}", "{l}_{f}", "{l}{m}{f}"],
+    ]
 
     combos = set()
+    for fn, mn, ln in product(firsts, middles, lasts):
+        for pattern_group in patterns:
+            for pattern in pattern_group:
+                email = pattern.format(f=fn.lower(), m=mn.lower(), l=ln.lower()).strip("._")
+                combos.add(email)
+    return sorted(combos)
 
-    for f, m, l in product(all_firsts, [middle, middle_initial, ""], [last, last_initial, ""]):
-        combos.update({
-            f"{f}@{domain}",
-            f"{f}{l}@{domain}",
-            f"{f}.{l}@{domain}",
-            f"{f}{m}{l}@{domain}",
-            f"{f}.{m}.{l}@{domain}",
-            f"{f}_{l}@{domain}",
-            f"{l}{f}@{domain}",
-            f"{l}.{f}@{domain}",
-            f"{l}_{f}@{domain}",
-            f"{f}{m}@{domain}",
-            f"{f}.{m}@{domain}",
-            f"{f}{m}.{l}@{domain}",
-        })
 
-    return sorted(list(combos))
+def validate_email_syntax(email):
+    return validators.email(email)
 
-# ---------------------- App UI ----------------------
 
-st.set_page_config(page_title="Email Permutator + Validator", layout="centered")
-st.title("📧 Email Permutator + Validator")
+def validate_domain(domain):
+    try:
+        dns.resolver.resolve(domain, 'MX')
+        return True
+    except:
+        return False
 
-tool_mode = st.radio("Select Tool:", ["Email Permutator", "Email Validator"])
+# Streamlit UI
+st.title("Email Permutator & Validator")
 
-if tool_mode == "Email Permutator":
-    st.subheader("🔁 Generate Email Permutations")
-    with st.form("permutation_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            first_name = st.text_input("First Name", max_chars=50)
-            middle_name = st.text_input("Middle Name (Optional)", max_chars=50)
-            nickname = st.text_input("Nickname (Optional)", max_chars=50)
-        with col2:
-            last_name = st.text_input("Last Name", max_chars=50)
-            domain = st.text_input("Domain (example.com)", max_chars=100)
-        submitted = st.form_submit_button("Generate Permutations")
-    
-    if submitted:
-        if not (first_name and last_name and domain):
-            st.warning("Please fill at least First Name, Last Name, and Domain.")
-        else:
-            emails = generate_permutations(first_name, middle_name, last_name, domain, nickname)
-            results = [(email, validate_email(email)) for email in emails]
-            
-            st.success(f"Generated {len(results)} email combinations.")
-            st.write("### Results:")
-            st.dataframe(results, use_container_width=True)
-            
-            # Download as CSV
-            output = io.StringIO()
-            writer = csv.writer(output)
-            writer.writerow(["Email", "Status"])
-            for row in results:
-                writer.writerow(row)
-            st.download_button("📥 Download CSV", output.getvalue(), "emails.csv", "text/csv")
+col1, col2 = st.columns(2)
 
-elif tool_mode == "Email Validator":
-    st.subheader("✅ Validate Email Addresses")
+with col1:
+    full_name = st.text_input("Full Name (e.g., John Michael Doe)")
+with col2:
+    domain_input = st.text_input("Website or Domain (e.g., example.com or https://example.com)")
 
-    uploaded_file = st.file_uploader("Upload CSV file (Column: email)", type="csv")
-    email_list = []
-    
-    if uploaded_file:
-        df = uploaded_file.read().decode("utf-8")
-        reader = csv.DictReader(io.StringIO(df))
-        email_list = [row["email"] for row in reader if "email" in row]
+if full_name and domain_input:
+    name_parts = clean_name(full_name).split()
+    first = name_parts[0] if len(name_parts) > 0 else ""
+    middle = name_parts[1] if len(name_parts) > 2 else ""
+    last = name_parts[-1] if len(name_parts) > 1 else ""
 
-    manual_input = st.text_area("Or Paste Emails (comma, space, or newline separated):")
-    if manual_input:
-        email_list.extend(re.split(r"[,\s]+", manual_input.strip()))
+    domain = extract_domain(domain_input)
+    emails = get_permutations(first, middle, last, NICKNAME_MAP)
 
-    email_list = list(set([e.strip() for e in email_list if e.strip()]))
+    valid_domain = validate_domain(domain)
 
-    if email_list:
-        if st.button("Validate Emails"):
-            results = [(email, validate_email(email)) for email in email_list]
-            st.success(f"Validated {len(results)} emails.")
-            st.dataframe(results, use_container_width=True)
-
-            # CSV download
-            output = io.StringIO()
-            writer = csv.writer(output)
-            writer.writerow(["Email", "Status"])
-            for row in results:
-                writer.writerow(row)
-            st.download_button("📥 Download CSV", output.getvalue(), "validated_emails.csv", "text/csv")
+    st.subheader("Generated Emails")
+    for e in emails:
+        email = f"{e}@{domain}"
+        syntax_valid = validate_email_syntax(email)
+        st.markdown(f"✅ `{email}`" if syntax_valid and valid_domain else f"❌ `{email}`")
